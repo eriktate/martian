@@ -4,7 +4,10 @@ import { transformSync } from "@swc/core";
 import type {
   Expression,
   CallExpression,
+  TsInterfaceDeclaration,
   TsType,
+  TsPropertySignature,
+  TsTypeElement,
   TsTypeAnnotation,
   TsTypeParameterInstantiation,
   VariableDeclarator,
@@ -15,7 +18,9 @@ function log(msg: string, thing: any) {
   console.log(msg, util.inspect(thing, { depth: null, colors: true }));
 }
 
-function getTypeNameFromType(ty: TsType | TsTypeAnnotation | TsTypeParameterInstantiation): string | undefined {
+function getTypeNameFromType(
+  ty: TsType | TsTypeAnnotation | TsTypeParameterInstantiation
+): string | undefined {
   switch (ty.type) {
     case "TsTypeAnnotation":
       if ("typeAnnotation" in ty) {
@@ -32,6 +37,94 @@ function getTypeNameFromType(ty: TsType | TsTypeAnnotation | TsTypeParameterInst
   }
 
   return;
+}
+
+function getPropName(expr: Expression): string {
+  switch (expr.type) {
+    case "Identifier":
+      return expr.value;
+  }
+
+  // TODO (etate): throw here?
+  return "unknown";
+}
+
+function getTypeAssertion(ty: TsType): Assertion {
+  switch (ty.type) {
+    case "TsKeywordType":
+      if ("kind" in ty) {
+        return keywordToAssertion(ty.kind);
+      }
+  }
+
+  throw new Error("property type could not be mapped to assertion");
+}
+
+type Assertion = "isRequired" | "isString" | "isNumber";
+
+type PropertyAssertions = {
+  name: string;
+  assertions: Assertion[];
+};
+
+function keywordToAssertion(keyword: string): Assertion {
+  switch (keyword) {
+    case "string":
+      return "isString";
+    case "number":
+      return "isNumber";
+  }
+
+  throw new Error(
+    `keyword type '${keyword}' does not have a mappable assertion`
+  );
+}
+
+function generatePropertyAssertions(prop: TsTypeElement): PropertyAssertions {
+  if (prop.type !== "TsPropertySignature") {
+    // TODO (etate): throw?
+    return {
+      name: "",
+      assertions: [],
+    };
+  }
+
+  const { key, optional, typeAnnotation } = prop;
+  const assertions: Assertion[] = [];
+
+  const name = getPropName(key);
+
+  if (!optional) {
+    assertions.push("isRequired");
+  }
+
+  if (!typeAnnotation) {
+    // TODO (etate): should this throw?
+    return {
+      name,
+      assertions,
+    };
+  }
+
+  assertions.push(getTypeAssertion(typeAnnotation.typeAnnotation));
+  return {
+    name,
+    assertions,
+  };
+}
+
+function generateValidationFunction(
+  typeName: string,
+  propAssertions: PropertyAssertions[]
+): string {
+  let func = `function marshal${typeName}(input) {\n`;
+  propAssertions.forEach(({ name, assertions }) => {
+    assertions.forEach((assertion) => {
+      func += `  ${assertion}(input["${name}"]);\n`;
+    });
+  });
+
+  return func + "}\n";
 }
 
 class ReplaceCallsite extends Visitor {
@@ -73,7 +166,7 @@ class MartianPlugin extends Visitor {
       return decl;
     }
 
-    if (decl.init == null)  {
+    if (decl.init == null) {
       return decl;
     }
 
@@ -87,6 +180,27 @@ class MartianPlugin extends Visitor {
   visitTsType(ty: TsType): TsType {
     return ty;
   }
+
+  visitTsInterfaceDeclaration(
+    decl: TsInterfaceDeclaration
+  ): TsInterfaceDeclaration {
+    log("Interface: ", decl);
+    if (decl.body.type !== "TsInterfaceBody") {
+      // TODO: throw?
+      return decl;
+    }
+
+    if (decl.id.type !== "Identifier") {
+      // TODO: throw?
+      return decl;
+    }
+
+    const assertions = decl.body.body.map(generatePropertyAssertions);
+    log("Assertions: ", assertions);
+    const validator = generateValidationFunction(decl.id.value, assertions);
+    console.log(validator);
+    return decl;
+  }
 }
 
 const file = fs.readFileSync("./example.ts").toString();
@@ -96,9 +210,8 @@ const res = transformSync(file, {
   jsc: {
     parser: {
       syntax: "typescript",
-    }
-  }
+    },
+  },
 });
 
-console.log(res);
-
+// console.log(res);

@@ -3,18 +3,15 @@ function $marshal<T>(src: any): T {
   return undefined as T;
 }
 
-
 interface ThingInterface {
   id: number;
-  name: string;
-
+  name?: string;
 }
 
 type ThingType = {
   id: number;
   name: string;
-}
-
+};
 
 const rawThing = `{
   "id": 1,
