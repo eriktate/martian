@@ -6,10 +6,11 @@ import type {
   CallExpression,
   TsInterfaceDeclaration,
   TsType,
-  TsPropertySignature,
   TsTypeElement,
   TsTypeAnnotation,
   TsTypeParameterInstantiation,
+  TsTypeAliasDeclaration,
+  Declaration,
   VariableDeclarator,
 } from "@swc/core";
 import { Visitor } from "@swc/core/Visitor";
@@ -113,18 +114,28 @@ function generatePropertyAssertions(prop: TsTypeElement): PropertyAssertions {
   };
 }
 
+type ValidationType = "interface" | "type";
 function generateValidationFunction(
+  type: ValidationType,
   typeName: string,
   propAssertions: PropertyAssertions[]
 ): string {
-  let func = `function marshal${typeName}(input) {\n`;
+  let func = `function marshal${typeName}(input: any): ${typeName} {\n`;
   propAssertions.forEach(({ name, assertions }) => {
     assertions.forEach((assertion) => {
       func += `  ${assertion}(input["${name}"]);\n`;
     });
   });
 
-  return func + "}\n";
+  if (type === "type") {
+    const expectedProps = propAssertions.map(prop => prop.name);
+    func += "  const expectedProps = new Set([ \"" + expectedProps.join("\", \"") + "\" ]);\n";
+    // TODO (etate): consider collecting extra prop names and adding them to error message
+    func += `  if (!Object.keys(input).every(expectedProps.has) throw new Error("too many props to marshal '${typeName}'");\n`;
+
+  }
+
+  return func + `  return input as ${typeName};\n}\n`;
 }
 
 class ReplaceCallsite extends Visitor {
@@ -184,7 +195,8 @@ class MartianPlugin extends Visitor {
   visitTsInterfaceDeclaration(
     decl: TsInterfaceDeclaration
   ): TsInterfaceDeclaration {
-    log("Interface: ", decl);
+    console.log("Found interface declaration");
+    // log("Interface: ", decl);
     if (decl.body.type !== "TsInterfaceBody") {
       // TODO: throw?
       return decl;
@@ -196,8 +208,32 @@ class MartianPlugin extends Visitor {
     }
 
     const assertions = decl.body.body.map(generatePropertyAssertions);
-    log("Assertions: ", assertions);
-    const validator = generateValidationFunction(decl.id.value, assertions);
+    // log("Assertions: ", assertions);
+    const validator = generateValidationFunction("interface", decl.id.value, assertions);
+    // console.log(validator);
+    return decl;
+  }
+
+  visitTsTypeAliasDeclaration(decl: TsTypeAliasDeclaration) {
+    log("Type Alias: ", decl);
+    if (decl.id.type !== "Identifier") {
+      // TODO: throw?
+      return decl;
+    }
+
+    const { typeAnnotation } = decl;
+    if (typeAnnotation == null)  {
+      // TODO: throw?
+      return decl;
+    }
+
+    if (typeAnnotation.type !== "TsTypeLiteral" || !("members" in typeAnnotation)) {
+      // TODO: throw?
+      return decl;
+    }
+
+    const assertions = typeAnnotation.members.map(generatePropertyAssertions);
+    const validator = generateValidationFunction("type", decl.id.value, assertions);
     console.log(validator);
     return decl;
   }
@@ -205,7 +241,7 @@ class MartianPlugin extends Visitor {
 
 const file = fs.readFileSync("./example.ts").toString();
 const res = transformSync(file, {
-  plugin: (m) => new MartianPlugin().visitProgram(m),
+  plugin: (m) => {console.log(m); return new MartianPlugin().visitProgram(m)},
   sourceMaps: true,
   jsc: {
     parser: {
