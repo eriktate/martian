@@ -1,27 +1,21 @@
 import util from "util";
-import { parseFileSync } from "@swc/core";
-import type { Statement, Expression, VariableDeclarator, Pattern, TsType, TsTypeAnnotation, Span, Super, Import } from "@swc/core";
-
-type Callsite = {
-  typeName: string;
-  span: Span;
-};
-
-const mod = parseFileSync("./example.ts", {
-  syntax: "typescript",
-  comments: false,
-  script: true,
-  target: "es3",
-  isModule: false,
-});
-
-console.log(util.inspect(mod, { depth: null, colors: true }));
+import fs from "fs";
+import { transformSync } from "@swc/core";
+import type {
+  Expression,
+  CallExpression,
+  TsType,
+  TsTypeAnnotation,
+  TsTypeParameterInstantiation,
+  VariableDeclarator,
+} from "@swc/core";
+import { Visitor } from "@swc/core/Visitor";
 
 function log(msg: string, thing: any) {
   console.log(msg, util.inspect(thing, { depth: null, colors: true }));
 }
 
-function getTypeNameFromType(ty: TsType | TsTypeAnnotation): string | undefined {
+function getTypeNameFromType(ty: TsType | TsTypeAnnotation | TsTypeParameterInstantiation): string | undefined {
   switch (ty.type) {
     case "TsTypeAnnotation":
       if ("typeAnnotation" in ty) {
@@ -31,47 +25,80 @@ function getTypeNameFromType(ty: TsType | TsTypeAnnotation): string | undefined 
       if ("typeName" in ty && ty.typeName.type === "Identifier") {
         return ty.typeName.value;
       }
+    case "TsTypeParameterInstantiation":
+      if ("params" in ty) {
+        return getTypeNameFromType(ty.params[0]);
+      }
   }
 
   return;
 }
 
-function getTypeAnnotation(pat: Pattern): string | undefined {
-  if (pat.type !== "Identifier") {
-    return;
+class ReplaceCallsite extends Visitor {
+  private typeName?: string;
+
+  constructor(typeName?: string) {
+    super();
+    this.typeName = typeName;
   }
 
-  const { typeAnnotation } = pat;
-  if (typeAnnotation == null) {
-    return;
+  visitCallExpression(expr: CallExpression): Expression {
+    if (expr.callee.type !== "Identifier") {
+      return expr;
+    }
+
+    if (expr.callee.value !== "$marshal") {
+      return expr;
+    }
+
+    let { typeName } = this;
+    if (typeName == null) {
+      const { typeArguments } = expr;
+      typeName = typeArguments && getTypeNameFromType(typeArguments);
+    }
+
+    // TODO (etate): figure out type name and grab appropriate function name
+    expr.callee.value = `marshal${typeName}`;
+    return expr;
   }
 
-  return getTypeNameFromType(typeAnnotation);
-}
-
-function findCallsites(node: Statement | Expression | VariableDeclarator, typeName?: string) {
-  switch (node.type) {
-    case "VariableDeclaration":
-      node.declarations.forEach(decl => findCallsites(decl, typeName));
-      break;
-    case "VariableDeclarator":
-      node.init && findCallsites(node.init, getTypeAnnotation(node.id));
-      break;
-    case "CallExpression":
-      // TODO (etate) if we don't have a typeName at this point, check for typeArguments at the callsite
-      console.log("Found call expression");
-      if (node.callee.type === "Identifier" && node.callee.value === "$marshal") {
-        const callsite = {
-          typeName,
-          span: node.span,
-        };
-        log("Found callsite: ", callsite);
-      }
+  visitTsType(ty: TsType): TsType {
+    return ty;
   }
 }
 
-function buildTypeMap(node: Statement) {
-  // TODO: find interface
+class MartianPlugin extends Visitor {
+  visitVariableDeclarator(decl: VariableDeclarator): VariableDeclarator {
+    if (decl.id.type !== "Identifier") {
+      return decl;
+    }
+
+    if (decl.init == null)  {
+      return decl;
+    }
+
+    const { typeAnnotation } = decl.id;
+    const typeName = typeAnnotation && getTypeNameFromType(typeAnnotation);
+
+    decl.init = new ReplaceCallsite(typeName).visitExpression(decl.init);
+    return decl;
+  }
+
+  visitTsType(ty: TsType): TsType {
+    return ty;
+  }
 }
 
-mod.body.forEach(stmt => findCallsites(stmt));
+const file = fs.readFileSync("./example.ts").toString();
+const res = transformSync(file, {
+  plugin: (m) => new MartianPlugin().visitProgram(m),
+  sourceMaps: true,
+  jsc: {
+    parser: {
+      syntax: "typescript",
+    }
+  }
+});
+
+console.log(res);
+
