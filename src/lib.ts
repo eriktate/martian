@@ -262,12 +262,13 @@ class ReplaceCallsite extends Visitor {
 // This means that at every point that a new scope is introduced, we need to visit using a new MartianPlugin with a
 // copy of the identifiers mapping. This will allow us to build up scopes as we descend without accidentally
 // exposing identifiers from non-visible scopes
-class MartianPlugin extends Visitor {
+export class MartianPlugin extends Visitor {
   private identifiers: Record<string, string | undefined>;
 
   constructor() {
     super();
     this.identifiers = {};
+    throw new Error("WTF");
   }
 
   visitImportDeclaration(decl: ImportDeclaration): ImportDeclaration {
@@ -361,15 +362,15 @@ class MartianPlugin extends Visitor {
   }
 }
 
-const file = fs.readFileSync("./example.ts").toString();
-const res = transformSync(file, {
-  plugin: (m) => {log("module: ", m); return new MartianPlugin().visitProgram(m)},
-  sourceMaps: true,
-  jsc: {
-    target: "es2016",
-    parser: {
-      syntax: "typescript",
-    },
-  },
-});
-console.log(res);
+// const file = fs.readFileSync("./example.ts").toString();
+// const res = transformSync(file, {
+//   plugin: (m) => {log("module: ", m); return new MartianPlugin().visitProgram(m)},
+//   sourceMaps: true,
+//   jsc: {
+//     target: "es2016",
+//     parser: {
+//       syntax: "typescript",
+//     },
+//   },
+// });
+// console.log(res);
