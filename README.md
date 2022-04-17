@@ -7,12 +7,12 @@ Extra-terrestrial, statically generated type marshaling for TypeScript
 Validate runtime data into TypeScript types with a single function call
 
 ```typescript
-import $marshal from 'martian';
+import $marshal from "martian";
 
 type SpaceShip = {
   id: number;
   name: string;
-  class: 'freighter' | 'destroyer' | 'yacht';
+  class: "freighter" | "destroyer" | "yacht";
 };
 
 interface CrewMember {
@@ -32,7 +32,7 @@ interface Captain {
 const rawSpaceShip = `{
   "id": 1,
   "name": "Millenium Falcon",
-  "class": "corvette"
+  "class": "freighter"
 }`;
 
 // types can be detected from the variable declartion
