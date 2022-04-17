@@ -10,14 +10,20 @@ import type {
   TsTypeAnnotation,
   TsTypeParameterInstantiation,
   TsTypeAliasDeclaration,
-  Declaration,
+  TsLiteralType,
   VariableDeclarator,
+  AssignmentExpression,
 } from "@swc/core";
 import { Visitor } from "@swc/core/Visitor";
+import { initFileWriter } from "./fileWriter";
+import type { Assertion } from "./assertions";
+import { generateAssertion } from "./assertions";
 
 function log(msg: string, thing: any) {
   console.log(msg, util.inspect(thing, { depth: null, colors: true }));
 }
+
+const fileWriter = initFileWriter();
 
 function getTypeNameFromType(
   ty: TsType | TsTypeAnnotation | TsTypeParameterInstantiation
@@ -50,35 +56,95 @@ function getPropName(expr: Expression): string {
   return "unknown";
 }
 
+type PropertyAssertions = {
+  name: string;
+  assertions: Assertion[];
+};
+
 function getTypeAssertion(ty: TsType): Assertion {
   switch (ty.type) {
     case "TsKeywordType":
       if ("kind" in ty) {
         return keywordToAssertion(ty.kind);
       }
+    case "TsUnionType":
+      if ("types" in ty) {
+        return unionToAssertion(ty.types);
+    }
+    case "TsArrayType":
+      if ("elemType" in ty) {
+        return {
+          fnName: "isArray",
+          assertion: getTypeAssertion(ty.elemType),
+        };
+      }
   }
 
   throw new Error("property type could not be mapped to assertion");
 }
 
-type Assertion = "isRequired" | "isString" | "isNumber";
 
-type PropertyAssertions = {
-  name: string;
-  assertions: Assertion[];
-};
 
 function keywordToAssertion(keyword: string): Assertion {
   switch (keyword) {
     case "string":
-      return "isString";
+      return { fnName: "isString" };
     case "number":
-      return "isNumber";
+      return { fnName: "isNumber" };
   }
 
   throw new Error(
     `keyword type '${keyword}' does not have a mappable assertion`
   );
+}
+
+function literalToAssertion(lit: TsLiteralType): Assertion {
+  const { literal } = lit;
+  if ("value" in literal) {
+    const assertion: Assertion = {
+      fnName: "isLiteral",
+      value: literal.value,
+      litType: "string", // TODO: need this default to make type system happy, but should revisit
+    }
+
+    switch (literal.type) {
+      case "StringLiteral":
+        return {
+          ...assertion,
+          litType: "string",
+        };
+      case "NumericLiteral":
+        return {
+          ...assertion,
+          litType: "number",
+        };
+      case "BooleanLiteral":
+        return {
+          ...assertion,
+          litType: "boolean",
+        };
+    }
+  }
+
+  throw new Error(`literal type ${literal.type} does not have a mappable assertion`);
+}
+
+function unionToAssertion(types: TsType[]): Assertion {
+  const assertions: Assertion[] = [];
+
+  types.forEach(ty => {
+    switch (ty.type) {
+      case "TsLiteralType":
+        if ("literal" in ty) {
+          assertions.push(literalToAssertion(ty));
+        }
+    }
+  })
+
+  return {
+    fnName: "isOneOf",
+    assertions: assertions,
+  };
 }
 
 function generatePropertyAssertions(prop: TsTypeElement): PropertyAssertions {
@@ -95,8 +161,11 @@ function generatePropertyAssertions(prop: TsTypeElement): PropertyAssertions {
 
   const name = getPropName(key);
 
-  if (!optional) {
-    assertions.push("isRequired");
+  if (optional) {
+    // we unshift isNullish assertions so we can short circuit later
+    assertions.unshift({ fnName: "isNullish" });
+  } else {
+    assertions.push({ fnName: "isRequired"});
   }
 
   if (!typeAnnotation) {
@@ -115,27 +184,43 @@ function generatePropertyAssertions(prop: TsTypeElement): PropertyAssertions {
 }
 
 type ValidationType = "interface" | "type";
+
 function generateValidationFunction(
   type: ValidationType,
   typeName: string,
   propAssertions: PropertyAssertions[]
 ): string {
-  let func = `function marshal${typeName}(input: any): ${typeName} {\n`;
+  let indention = "  ";
+  let func = `function marshal${typeName}(input: any): any {\n`;
   propAssertions.forEach(({ name, assertions }) => {
-    assertions.forEach((assertion) => {
-      func += `  ${assertion}(input["${name}"]);\n`;
+    let nullish = false;
+    assertions.forEach((assertion, idx) => {
+      if (idx === 0 && assertion.fnName === "isNullish") {
+        nullish = true;
+        // an optional value should short circuit all other assertions if nullish
+        func += `${indention}if (!isNullish(input["${name}"])) {\n`;
+        indention = indention.concat("  ");
+        return;
+      }
+      func += `${indention}${generateAssertion(assertion, name)};\n`;
     });
+
+    // make sure we close the block if the prop is optional
+    if (nullish) {
+      indention = indention.substring(0, indention.length - 2);
+      func += `${indention}}\n`;
+    }
   });
 
   if (type === "type") {
     const expectedProps = propAssertions.map(prop => prop.name);
     func += "  const expectedProps = new Set([ \"" + expectedProps.join("\", \"") + "\" ]);\n";
     // TODO (etate): consider collecting extra prop names and adding them to error message
-    func += `  if (!Object.keys(input).every(expectedProps.has) throw new Error("too many props to marshal '${typeName}'");\n`;
+    func += `  if (!Object.keys(input).every(expectedProps.has)) throw new Error("too many props to marshal '${typeName}'");\n`;
 
   }
 
-  return func + `  return input as ${typeName};\n}\n`;
+  return func + `  return input;\n}\n`;
 }
 
 class ReplaceCallsite extends Visitor {
@@ -161,7 +246,7 @@ class ReplaceCallsite extends Visitor {
       typeName = typeArguments && getTypeNameFromType(typeArguments);
     }
 
-    // TODO (etate): figure out type name and grab appropriate function name
+    // TODO (etate): generate a TsAsExpression and fit this modified CallExpression inside
     expr.callee.value = `marshal${typeName}`;
     return expr;
   }
@@ -171,18 +256,33 @@ class ReplaceCallsite extends Visitor {
   }
 }
 
+// TODO (etate): In order to deal with cases where the type information isn't included in the same statement
+// as the $marshal() CallExpressions, we need to build up a list of identifiers available within the scope.
+// This means that at every point that a new scope is introduced, we need to visit using a new MartianPlugin with a
+// copy of the identifiers mapping. This will allow us to build up scopes as we descend without accidentally
+// exposing identifiers from non-visible scopes
 class MartianPlugin extends Visitor {
+  identifiers: Record<string, string | undefined>;
+
+  constructor() {
+    super();
+    this.identifiers = {};
+  }
+
   visitVariableDeclarator(decl: VariableDeclarator): VariableDeclarator {
     if (decl.id.type !== "Identifier") {
       return decl;
     }
 
+    const { typeAnnotation } = decl.id;
+    const typeName = (typeAnnotation && getTypeNameFromType(typeAnnotation)) ?? this.identifiers[decl.id.value];
+
+    this.identifiers[decl.id.value] = typeName;
+
     if (decl.init == null) {
+      console.log("Null init?");
       return decl;
     }
-
-    const { typeAnnotation } = decl.id;
-    const typeName = typeAnnotation && getTypeNameFromType(typeAnnotation);
 
     decl.init = new ReplaceCallsite(typeName).visitExpression(decl.init);
     return decl;
@@ -195,8 +295,6 @@ class MartianPlugin extends Visitor {
   visitTsInterfaceDeclaration(
     decl: TsInterfaceDeclaration
   ): TsInterfaceDeclaration {
-    console.log("Found interface declaration");
-    // log("Interface: ", decl);
     if (decl.body.type !== "TsInterfaceBody") {
       // TODO: throw?
       return decl;
@@ -210,12 +308,11 @@ class MartianPlugin extends Visitor {
     const assertions = decl.body.body.map(generatePropertyAssertions);
     // log("Assertions: ", assertions);
     const validator = generateValidationFunction("interface", decl.id.value, assertions);
-    // console.log(validator);
+    fileWriter.writeFn(validator);
     return decl;
   }
 
   visitTsTypeAliasDeclaration(decl: TsTypeAliasDeclaration) {
-    log("Type Alias: ", decl);
     if (decl.id.type !== "Identifier") {
       // TODO: throw?
       return decl;
@@ -234,14 +331,27 @@ class MartianPlugin extends Visitor {
 
     const assertions = typeAnnotation.members.map(generatePropertyAssertions);
     const validator = generateValidationFunction("type", decl.id.value, assertions);
-    console.log(validator);
+    fileWriter.writeFn(validator);
     return decl;
+  }
+
+  visitAssignmentExpression(expr: AssignmentExpression): AssignmentExpression {
+    const { left, right } = expr;
+    if (left.type === "Identifier") {
+      const typeName = this.identifiers[left.value];
+      return {
+        ...expr,
+        right: new ReplaceCallsite(typeName).visitExpression(right),
+      }
+    }
+
+    return expr;
   }
 }
 
 const file = fs.readFileSync("./example.ts").toString();
 const res = transformSync(file, {
-  plugin: (m) => {console.log(m); return new MartianPlugin().visitProgram(m)},
+  plugin: (m) => {log("module: ", m); return new MartianPlugin().visitProgram(m)},
   sourceMaps: true,
   jsc: {
     parser: {
@@ -250,4 +360,4 @@ const res = transformSync(file, {
   },
 });
 
-// console.log(res);
+console.log(res);

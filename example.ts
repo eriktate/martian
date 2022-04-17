@@ -1,22 +1,54 @@
-function $marshal<T>(src: any): T {
-  throw new Error("marshal has not been replaced for this callsite");
-  return undefined as T;
-}
+import $marshal from './src/marshal';
 
-interface ThingInterface {
-  id: number;
-  name?: string;
-}
-
-type ThingType = {
+type SpaceShip = {
   id: number;
   name: string;
+  class: 'freighter' | 'destroyer' | 'yacht';
 };
 
-const rawThing = `{
+interface CrewMember {
+  id: number;
+  name: string;
+  nickName?: string;
+}
+
+interface Captain {
+  id: number;
+  name: string;
+  nickName?: string;
+  crewIds: number[];
+}
+
+
+const rawSpaceShip = `{
   "id": 1,
-  "name": "Test"
+  "name": "Millenium Falcon",
+  "class": "corvette"
 }`;
 
-const thingInterface: ThingInterface = $marshal(rawThing);
-const thingType = $marshal<ThingType>(rawThing);
+
+// types can be detected from the variable declartion
+const spaceShip: SpaceShip = $marshal(JSON.parse(rawSpaceShip));
+console.log(spaceShip);
+
+const rawCrewMember = `{
+  "id": 2,
+  "name": "Chewbacca",
+  "nickName": "Chewy"
+}`;
+
+
+// types can be detected using generic type annotations
+const crewMember = $marshal<CrewMember>(JSON.parse(rawSpaceShip));
+console.log(crewMember);
+
+const rawCaptain = `{
+  "id": 3,
+  "name": "Han Solo",
+  "crew": [2]
+}`;
+
+// types can be detected on assignment to identfiers with known types
+let captain: Captain;
+captain = $marshal(JSON.parse(rawCaptain));
+
