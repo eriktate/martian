@@ -61,11 +61,12 @@ captain = $marshal(JSON.parse(rawCaptain));
 ```
 
 ## What is this for?
-The intention behind martian is to convert common cases of runtime data into validated TypeScript types without any custom validation code or special DSLs. For now this focuses on plain javascript objects and is limited to simple types you could easily represent as JSON.
+The intention behind martian is to convert common cases of runtime data into validated TypeScript types without any custom validation code or special DSLs. For now this focuses on plain javascript objects and is limited to simple types you could easily represent as JSON. Using martian should be about as simple as using an `as` typecast but without the silent type failures.
 
 ## How does it work?
 
 _TODO: make better words_
+
 Martian exposes a single function called `$marshal()`, which you can use throughout your code to transform runtime data (e.g. JSON, raw objects, etc) into validated TypeScript types. This works by statically analyzing your types and lazily generating bespoke validator functions for each of them. Your calls to `$marshal()` are replaced with the generated validator functions and included in your final bundle.
 
 ## Why the `$`?
