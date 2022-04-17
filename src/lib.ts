@@ -13,6 +13,7 @@ import type {
   TsLiteralType,
   VariableDeclarator,
   AssignmentExpression,
+  ImportDeclaration,
 } from "@swc/core";
 import { Visitor } from "@swc/core/Visitor";
 import { initFileWriter } from "./fileWriter";
@@ -191,7 +192,7 @@ function generateValidationFunction(
   propAssertions: PropertyAssertions[]
 ): string {
   let indention = "  ";
-  let func = `function marshal${typeName}(input: any): any {\n`;
+  let func = `function marshal${typeName}(input: any) {\n`;
   propAssertions.forEach(({ name, assertions }) => {
     let nullish = false;
     assertions.forEach((assertion, idx) => {
@@ -216,7 +217,7 @@ function generateValidationFunction(
     const expectedProps = propAssertions.map(prop => prop.name);
     func += "  const expectedProps = new Set([ \"" + expectedProps.join("\", \"") + "\" ]);\n";
     // TODO (etate): consider collecting extra prop names and adding them to error message
-    func += `  if (!Object.keys(input).every(expectedProps.has)) throw new Error("too many props to marshal '${typeName}'");\n`;
+    func += `  if (!Object.keys(input).every(key => expectedProps.has(key))) throw new Error("too many props to marshal '${typeName}'");\n`;
 
   }
 
@@ -247,7 +248,7 @@ class ReplaceCallsite extends Visitor {
     }
 
     // TODO (etate): generate a TsAsExpression and fit this modified CallExpression inside
-    expr.callee.value = `marshal${typeName}`;
+    expr.callee.value = `$marshal.marshal${typeName}`;
     return expr;
   }
 
@@ -262,11 +263,22 @@ class ReplaceCallsite extends Visitor {
 // copy of the identifiers mapping. This will allow us to build up scopes as we descend without accidentally
 // exposing identifiers from non-visible scopes
 class MartianPlugin extends Visitor {
-  identifiers: Record<string, string | undefined>;
+  private identifiers: Record<string, string | undefined>;
 
   constructor() {
     super();
     this.identifiers = {};
+  }
+
+  visitImportDeclaration(decl: ImportDeclaration): ImportDeclaration {
+    log("Import:", decl);
+    if (decl.source.value.includes("marshal")) {
+      return {
+        ...decl,
+        specifiers: [ { ...decl.specifiers[0], type: "ImportNamespaceSpecifier" } ],
+      }
+    }
+    return decl;
   }
 
   visitVariableDeclarator(decl: VariableDeclarator): VariableDeclarator {
@@ -354,10 +366,10 @@ const res = transformSync(file, {
   plugin: (m) => {log("module: ", m); return new MartianPlugin().visitProgram(m)},
   sourceMaps: true,
   jsc: {
+    target: "es2016",
     parser: {
       syntax: "typescript",
     },
   },
 });
-
 console.log(res);

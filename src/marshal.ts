@@ -20,7 +20,7 @@ function $marshal<T>(src: any): T {
 export default $marshal;
 
 // GENERATED MARSHALERS
-export function marshalSpaceShip(input: any): any {
+export function marshalSpaceShip(input: any) {
   isRequired(input["id"]);
   isNumber(input["id"]);
   isRequired(input["name"]);
@@ -28,11 +28,11 @@ export function marshalSpaceShip(input: any): any {
   isRequired(input["class"]);
   isOneOf(input["class"], [isLiteral("freighter"), isLiteral("destroyer"), isLiteral("yacht")]);
   const expectedProps = new Set([ "id", "name", "class" ]);
-  if (!Object.keys(input).every(expectedProps.has)) throw new Error("too many props to marshal 'SpaceShip'");
+  if (!Object.keys(input).every(key => expectedProps.has(key))) throw new Error("too many props to marshal 'SpaceShip'");
   return input;
 }
 
-export function marshalCrewMember(input: any): any {
+export function marshalCrewMember(input: any) {
   isRequired(input["id"]);
   isNumber(input["id"]);
   isRequired(input["name"]);
@@ -43,7 +43,7 @@ export function marshalCrewMember(input: any): any {
   return input;
 }
 
-export function marshalCaptain(input: any): any {
+export function marshalCaptain(input: any) {
   isRequired(input["id"]);
   isNumber(input["id"]);
   isRequired(input["name"]);

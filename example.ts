@@ -1,9 +1,9 @@
-import $marshal from './src/marshal';
+import $marshal from "./src/marshal";
 
 type SpaceShip = {
   id: number;
   name: string;
-  class: 'freighter' | 'destroyer' | 'yacht';
+  class: "freighter" | "destroyer" | "yacht";
 };
 
 interface CrewMember {
@@ -23,7 +23,7 @@ interface Captain {
 const rawSpaceShip = `{
   "id": 1,
   "name": "Millenium Falcon",
-  "class": "corvette"
+  "class": "freighter"
 }`;
 
 
@@ -39,16 +39,15 @@ const rawCrewMember = `{
 
 
 // types can be detected using generic type annotations
-const crewMember = $marshal<CrewMember>(JSON.parse(rawSpaceShip));
+const crewMember = $marshal<CrewMember>(JSON.parse(rawCrewMember));
 console.log(crewMember);
 
 const rawCaptain = `{
   "id": 3,
   "name": "Han Solo",
-  "crew": [2]
+  "crewIds": [2]
 }`;
 
 // types can be detected on assignment to identfiers with known types
 let captain: Captain;
 captain = $marshal(JSON.parse(rawCaptain));
-

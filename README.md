@@ -52,7 +52,7 @@ const crewMember = $marshal<CrewMember>(JSON.parse(rawSpaceShip));
 const rawCaptain = `{
   "id": 3,
   "name": "Han Solo",
-  "crew": [2]
+  "crewIds": [2]
 }`;
 
 // types can be detected on assignment to identfiers with known types
